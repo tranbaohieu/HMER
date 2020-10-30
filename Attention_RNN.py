@@ -139,10 +139,11 @@ class AttnDecoderRNN(nn.Module):
 
         #output
         # output = F.log_softmax(self.out(hidden2+embedded2+ct2), dim=1)
-        output = F.log_softmax(self.out(self.dropout(hidden2+embedded2+ct2)), dim=1)
+        out_emb = self.dropout(hidden2+embedded2+ct2)
+        output = F.log_softmax(self.out(out_emb), dim=1)
         output = output.unsqueeze(1)
 
-        return output, hidden_next, et_div_all, attention_sum
+        return output, hidden_next, et_div_all, attention_sum, out_emb
 
     def initHidden(self,batch_size):
         result = Variable(torch.randn(batch_size, 1, self.hidden_size))

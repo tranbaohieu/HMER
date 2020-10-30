@@ -4,6 +4,7 @@ Pytorch >= 0.4
 Written by Hongyu Wang in Beihang university
 '''
 import torch
+print(torch.cuda.device_count())
 import math
 import torch.nn as nn
 from torch.autograd import Variable
@@ -17,7 +18,7 @@ from Attention_RNN import AttnDecoderRNN
 import random
 import matplotlib.pyplot as plt
 from PIL import Image
-
+from Discriminator import Discriminator
 
 # compute the wer loss
 def cmp_result(label,rec):
@@ -50,8 +51,8 @@ dictionaries=['./dictionary.txt']
 batch_Imagesize=500000
 valid_batch_Imagesize=500000
 # batch_size for training and testing
-batch_size=6
-batch_size_t=6
+batch_size=2
+batch_size_t=2
 # the max (label length/Image size) in training and testing
 # you can change 'maxlen','maxImagesize' by the size of your GPU
 maxlen=48
@@ -61,7 +62,7 @@ hidden_size = 256
 # teacher_forcing_ratio 
 teacher_forcing_ratio = 1
 # change the gpu id 
-gpu = [0,1]
+gpu = [0]
 # learning rate
 lr_rate = 0.0001
 # flag to remember when to change the learning rate
@@ -177,7 +178,7 @@ test_loader = torch.utils.data.DataLoader(
     num_workers=2,
 )
 
-def my_train(target_length,attn_decoder1,
+def my_train(target_length,attn_decoder1, discriminator,
              output_highfeature, output_area,y,criterion,encoder_optimizer1,decoder_optimizer1,x_mean,dense_input,h_mask,w_mask,gpu,
              decoder_input,decoder_hidden,attention_sum,decoder_attention):
     loss = 0
@@ -192,7 +193,7 @@ def my_train(target_length,attn_decoder1,
         my_num = 0
 
         for di in range(target_length):
-            decoder_output, decoder_hidden, decoder_attention, attention_sum = attn_decoder1(decoder_input,
+            decoder_output, decoder_hidden, decoder_attention, attention_sum, out_emb = attn_decoder1(decoder_input,
                                                                                              decoder_hidden,
                                                                                              output_highfeature,
                                                                                              output_area,
@@ -202,6 +203,7 @@ def my_train(target_length,attn_decoder1,
             
             
             #print(decoder_output.size()) (batch,1,112)
+            print("discriminator: ", discriminator(out_emb).size())
             y = y.unsqueeze(0)
             for i in range(batch_size):
                 if int(y[0][i][di]) == 0:
@@ -230,7 +232,7 @@ def my_train(target_length,attn_decoder1,
         decoder_optimizer1.zero_grad()
         my_num = 0
         for di in range(target_length):
-            decoder_output, decoder_hidden, decoder_attention,attention_sum= attn_decoder1(decoder_input, decoder_hidden,
+            decoder_output, decoder_hidden, decoder_attention,attention_sum, out_emb= attn_decoder1(decoder_input, decoder_hidden,
                                                                                 output_highfeature, output_area,
                                                                                 attention_sum,decoder_attention,dense_input,batch_size,
                                                                                 h_mask,w_mask,gpu)
@@ -265,7 +267,7 @@ def my_train(target_length,attn_decoder1,
 
 encoder = densenet121()
 
-pthfile = r'densenet121-a639ec97.pth'
+pthfile = r'./model/densenet121-a639ec97.pth'
 pretrained_dict = torch.load(pthfile) 
 encoder_dict = encoder.state_dict()
 pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in encoder_dict}
@@ -278,6 +280,10 @@ encoder=encoder.cuda()
 attn_decoder1 = attn_decoder1.cuda()
 encoder = torch.nn.DataParallel(encoder, device_ids=gpu)
 attn_decoder1 = torch.nn.DataParallel(attn_decoder1, device_ids=gpu)
+
+discriminator = Discriminator(128, 512)
+discriminator = discriminator.cuda()
+discriminator = torch.nn.DataParallel(discriminator, device_ids=gpu)
 
 def imresize(im,sz):
     pil_im = Image.fromarray(im)
@@ -355,7 +361,7 @@ for epoch in range(200):
         attention_sum_init = torch.zeros(batch_size,1,dense_input,output_area).cuda()
         decoder_attention_init = torch.zeros(batch_size,1,dense_input,output_area).cuda()
 
-        running_loss += my_train(target_length,attn_decoder1,output_highfeature,
+        running_loss += my_train(target_length,attn_decoder1, discriminator, output_highfeature,
                                 output_area,y,criterion,encoder_optimizer1,decoder_optimizer1,x_mean,dense_input,h_mask,w_mask,gpu,
                                 decoder_input_init,decoder_hidden_init,attention_sum_init,decoder_attention_init)
 
@@ -390,7 +396,7 @@ for epoch in range(200):
         x_real_width = x_t.size()[3]
         if x_t.size()[0]<batch_size_t:
             break
-        print('testing for %.3f%%'%(step_t*100*batch_size_t/len_test),end='\r')
+        print('testing for %.3f%%'%(step_t*100*batch_size_t/len_test))
         h_mask_t = []
         w_mask_t = []
         for i in x_t:
@@ -440,7 +446,7 @@ for epoch in range(200):
         m = torch.nn.ZeroPad2d((0,maxlen-y_t.size()[1],0,0))
         y_t = m(y_t)
         for i in range(maxlen):
-            decoder_output, decoder_hidden_t, decoder_attention_t, attention_sum_t = attn_decoder1(decoder_input_t,
+            decoder_output, decoder_hidden_t, decoder_attention_t, attention_sum_t, out_emb = attn_decoder1(decoder_input_t,
                                                                                              decoder_hidden_t,
                                                                                              output_highfeature_t,
                                                                                              output_area_t,
@@ -514,8 +520,8 @@ for epoch in range(200):
         print(exprate)
         print("saving the model....")
         print('encoder_lr%.5f_GN_te1_d05_SGD_bs6_mask_conv_bn_b_xavier.pkl' %(lr_rate))
-        torch.save(encoder.state_dict(), 'model/encoder_lr%.5f_GN_te1_d05_SGD_bs6_mask_conv_bn_b_xavier.pkl'%(lr_rate))
-        torch.save(attn_decoder1.state_dict(), 'model/attn_decoder_lr%.5f_GN_te1_d05_SGD_bs6_mask_conv_bn_b_xavier.pkl'%(lr_rate))
+        torch.save(encoder.state_dict(), './model/encoder_lr%.5f_GN_te1_d05_SGD_bs6_mask_conv_bn_b_xavier.pkl'%(lr_rate))
+        torch.save(attn_decoder1.state_dict(), './model/attn_decoder_lr%.5f_GN_te1_d05_SGD_bs6_mask_conv_bn_b_xavier.pkl'%(lr_rate))
         print("done")
         flag = 0
     else:

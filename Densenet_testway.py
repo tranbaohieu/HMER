@@ -150,8 +150,8 @@ attn_decoder1 = torch.nn.DataParallel(attn_decoder1, device_ids=gpu)
 encoder = encoder.cuda()
 attn_decoder1 = attn_decoder1.cuda()
 
-encoder.load_state_dict(torch.load('model/encoder_lr0.00001_BN_te1_d05_SGD_bs8_mask_conv_bn_b.pkl'))
-attn_decoder1.load_state_dict(torch.load('model/attn_decoder_lr0.00001_BN_te1_d05_SGD_bs8_mask_conv_bn_b.pkl'))
+encoder.load_state_dict(torch.load('./model/encoder_lr0.00001_GN_te1_d05_SGD_bs6_mask_conv_bn_b_xavier.pkl'))
+attn_decoder1.load_state_dict(torch.load('./model/attn_decoder_lr0.00001_GN_te1_d05_SGD_bs6_mask_conv_bn_b_xavier.pkl'))
 
 total_dist = 0
 total_label = 0
