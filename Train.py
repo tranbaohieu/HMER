@@ -51,8 +51,8 @@ dictionaries=['./dictionary.txt']
 batch_Imagesize=500000
 valid_batch_Imagesize=500000
 # batch_size for training and testing
-batch_size=2
-batch_size_t=2
+batch_size=1
+batch_size_t=1
 # the max (label length/Image size) in training and testing
 # you can change 'maxlen','maxImagesize' by the size of your GPU
 maxlen=48
@@ -101,9 +101,14 @@ class custom_dset(data.Dataset):
         label_setting = torch.from_numpy(numpy.array(self.train_label[index])).type(torch.LongTensor)
 
         size = train_setting.size()
+
+        # print("size: ", size)
         train_setting = train_setting.view(1,size[2],size[3])
+        # print("train set: ", train_setting.size())
+        train_print = torch.rand(train_setting.size())
+        # print("train print: ", train_print.size())
         label_setting = label_setting.view(-1)
-        return train_setting,label_setting
+        return train_setting,label_setting, train_print
 
     def __len__(self):
         return len(self.train)
@@ -115,13 +120,29 @@ off_image_test = custom_dset(test,test_label,batch_size)
 # collate_fn is writting for padding imgs in batch. 
 # As images in my dataset are different size, so the padding is necessary.
 # Padding images to the max image size in a mini-batch and cat a mask. 
+
+def padding_mask(ii, aa1, bb1):
+    ii = ii.float()
+    img_size_h = ii.size()[1]
+    img_size_w = ii.size()[2]
+    img_mask_sub_s = torch.ones(1,img_size_h,img_size_w).type(torch.FloatTensor)
+    img_mask_sub_s = img_mask_sub_s*255.0
+    img_mask_sub = torch.cat((ii,img_mask_sub_s),dim=0)
+    padding_h = aa1-img_size_h
+    padding_w = bb1-img_size_w
+    m = torch.nn.ZeroPad2d((0,padding_w,0,padding_h))
+    img_mask_sub_padding = m(img_mask_sub)
+    img_mask_sub_padding = img_mask_sub_padding.unsqueeze(0)
+    return img_mask_sub_padding
+
 def collate_fn(batch):
     batch.sort(key=lambda x: len(x[1]), reverse=True)
-    img, label = zip(*batch)
+    img, label, img_p = zip(*batch)
     aa1 = 0
     bb1 = 0
     k = 0
     k1 = 0
+    kp = 0
     max_len = len(label[0])+1
     for j in range(len(img)):
         size = img[j].size()
@@ -131,22 +152,21 @@ def collate_fn(batch):
             bb1 = size[2]
 
     for ii in img:
-        ii = ii.float()
-        img_size_h = ii.size()[1]
-        img_size_w = ii.size()[2]
-        img_mask_sub_s = torch.ones(1,img_size_h,img_size_w).type(torch.FloatTensor)
-        img_mask_sub_s = img_mask_sub_s*255.0
-        img_mask_sub = torch.cat((ii,img_mask_sub_s),dim=0)
-        padding_h = aa1-img_size_h
-        padding_w = bb1-img_size_w
-        m = torch.nn.ZeroPad2d((0,padding_w,0,padding_h))
-        img_mask_sub_padding = m(img_mask_sub)
-        img_mask_sub_padding = img_mask_sub_padding.unsqueeze(0)
+        img_mask_sub_padding = padding_mask(ii, aa1, bb1)
         if k==0:
             img_padding_mask = img_mask_sub_padding
         else:
             img_padding_mask = torch.cat((img_padding_mask,img_mask_sub_padding),dim=0)
         k = k+1
+
+    for iii in img_p:
+        img_mask_sub_padding_p = padding_mask(iii, aa1, bb1)
+        if kp==0:
+            img_padding_mask_p = img_mask_sub_padding_p
+        else:
+            img_padding_mask_p = torch.cat((img_padding_mask_p,img_mask_sub_padding_p),dim=0)
+        kp+=1
+
 
     for ii1 in label:
         ii1 = ii1.long()
@@ -161,7 +181,10 @@ def collate_fn(batch):
         k1 = k1+1
 
     img_padding_mask = img_padding_mask/255.0
-    return img_padding_mask, label_padding
+    img_padding_mask_p = img_padding_mask_p/255.0
+    # print("img_padding_mask: ", img_padding_mask.size())
+    # print("label_padding", label_padding.size())
+    return img_padding_mask, label_padding, img_padding_mask_p
 
 train_loader = torch.utils.data.DataLoader(
     dataset = off_image_train,
@@ -179,8 +202,9 @@ test_loader = torch.utils.data.DataLoader(
 )
 
 def my_train(target_length,attn_decoder1, discriminator,
-             output_highfeature, output_area,y,criterion,encoder_optimizer1,decoder_optimizer1,x_mean,dense_input,h_mask,w_mask,gpu,
-             decoder_input,decoder_hidden,attention_sum,decoder_attention):
+             output_highfeature, output_area, output_highfeature_p, output_area_p,y,criterion,encoder_optimizer1,decoder_optimizer1,x_mean, xp_mean,dense_input,h_mask,w_mask,gpu,
+             decoder_input,decoder_hidden,attention_sum,decoder_attention, dense_input_p,h_mask_p,w_mask_p,
+             decoder_input_p,decoder_hidden_p,attention_sum_p,decoder_attention_p):
     loss = 0
 
     use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
@@ -203,7 +227,7 @@ def my_train(target_length,attn_decoder1, discriminator,
             
             
             #print(decoder_output.size()) (batch,1,112)
-            print("discriminator: ", discriminator(out_emb).size())
+            # print("discriminator: ", discriminator(out_emb).size())
             y = y.unsqueeze(0)
             for i in range(batch_size):
                 if int(y[0][i][di]) == 0:
@@ -287,6 +311,7 @@ discriminator = torch.nn.DataParallel(discriminator, device_ids=gpu)
 
 def imresize(im,sz):
     pil_im = Image.fromarray(im)
+    # print("size: ",sz)
     return numpy.array(pil_im.resize(sz))
 
 
@@ -296,6 +321,12 @@ criterion = nn.NLLLoss()
 decoder_input_init = torch.LongTensor([111]*batch_size).cuda()
 decoder_hidden_init = torch.randn(batch_size, 1, hidden_size).cuda()
 nn.init.xavier_uniform_(decoder_hidden_init)
+
+# attn_decoder1.load_state_dict(torch.load('model/attn_decoder_lr0.00001_BN_te1_d05_SGD_bs8_mask_conv_bn_b.pkl'))
+decoder_input_init_p = torch.LongTensor([111]*batch_size).cuda()
+decoder_hidden_init_p = torch.randn(batch_size, 1, hidden_size).cuda()
+nn.init.xavier_uniform_(decoder_hidden_init_p)
+
 
 # encoder_optimizer1 = torch.optim.Adam(encoder.parameters(), lr=lr_rate)
 # decoder_optimizer1 = torch.optim.Adam(attn_decoder1.parameters(), lr=lr_rate)
@@ -322,12 +353,16 @@ for epoch in range(200):
     attn_decoder1.train(mode=True)
 
     # this is the train
-    for step,(x,y) in enumerate(train_loader):
+    for step,(x,y,xp) in enumerate(train_loader):
+        # print("xp: ",xp.size())
+        # print("y: ", y.size())
         if x.size()[0]<batch_size:
             break
         h_mask = []
         w_mask = []
-        for i in x:
+        h_mask_p = []
+        w_mask_p = []
+        for i,j in zip(x, xp):
             #h*w
             size_mask = i[1].size()
             s_w = str(i[1][0])
@@ -339,31 +374,58 @@ for epoch in range(200):
             h_mask.append(h_comp)
             w_mask.append(w_comp)
 
+            size_mask_p = j[1].size()
+            s_w_p = str(j[1][0])
+            s_h_p = str(j[1][:,1])
+            w_p = s_w_p.count('1')
+            h_p = s_h_p.count('1')
+            h_comp_p = int(h_p/16)+1
+            w_comp_p = int(w_p/16)+1
+            h_mask_p.append(h_comp_p)
+            w_mask_p.append(w_comp_p)
+
         x = x.cuda()
         y = y.cuda()
+        xp = xp.cuda()
         # out is CNN featuremaps
         output_highfeature = encoder(x)
+        print("output_highfeature: ", output_highfeature.size())
+        output_highfeature_p = encoder(xp)
         x_mean=[]
-        for i in output_highfeature:
+        xp_mean = []
+        for i,j in zip(output_highfeature,output_highfeature_p):
             x_mean.append(float(torch.mean(i)))
+            xp_mean.append(float(torch.mean(j)))
         # x_mean = torch.mean(output_highfeature)
         # x_mean = float(x_mean)
         for i in range(batch_size):
             decoder_hidden_init[i] = decoder_hidden_init[i]*x_mean[i]
             decoder_hidden_init[i] = torch.tanh(decoder_hidden_init[i])
+            decoder_hidden_init_p[i] = decoder_hidden_init_p[i]*xp_mean[i]
+            decoder_hidden_init_p[i] = torch.tanh(decoder_hidden_init_p[i])
+            # decoder_hidden_init[]
 
         # dense_input is height and output_area is width which is bb
         output_area1 = output_highfeature.size()
+        output_area1_p = output_highfeature_p.size()
 
         output_area = output_area1[3]
+        output_area_p = output_area1_p[3]
+
         dense_input = output_area1[2]
+        dense_input_p = output_area1_p[2]
+
         target_length = y.size()[1]
         attention_sum_init = torch.zeros(batch_size,1,dense_input,output_area).cuda()
+        attention_sum_init_p = torch.zeros(batch_size, 1, dense_input_p, output_area_p).cuda()
+
         decoder_attention_init = torch.zeros(batch_size,1,dense_input,output_area).cuda()
+        decoder_attention_init_p = torch.zeros(batch_size,1,dense_input_p,output_area_p).cuda()
 
         running_loss += my_train(target_length,attn_decoder1, discriminator, output_highfeature,
-                                output_area,y,criterion,encoder_optimizer1,decoder_optimizer1,x_mean,dense_input,h_mask,w_mask,gpu,
-                                decoder_input_init,decoder_hidden_init,attention_sum_init,decoder_attention_init)
+                                output_area, output_highfeature_p, output_area_p,y,criterion,encoder_optimizer1,decoder_optimizer1,x_mean, xp_mean,dense_input,h_mask,w_mask,gpu,
+                                decoder_input_init,decoder_hidden_init,attention_sum_init,decoder_attention_init, dense_input_p,h_mask_p,w_mask_p,
+                                decoder_input_init_p,decoder_hidden_init_p,attention_sum_init_p,decoder_attention_init_p)
 
         
         if step % 20 == 19:
