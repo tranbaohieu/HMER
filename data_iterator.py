@@ -12,7 +12,8 @@ import torch
 def dataIterator(feature_file,label_file,dictionary,batch_size,batch_Imagesize,maxlen,maxImagesize):
     
     fp=open(feature_file,'rb')
-    features=pkl.load(fp)
+    # pkl.dump(fp, feature_file, protocol=2)
+    features=pkl.load(fp, encoding="latin1")
     fp.close()
 
     fp2=open(label_file,'r')
